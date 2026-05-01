@@ -1,0 +1,22 @@
+services:
+  drmf-graph-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: drmf-graph-collector:latest
+    container_name: drmf-graph-collector
+    env_file:
+      - .env
+    environment:
+      OUTPUT_PATH: /output/drmf_output.json
+      GRAPH_BASE_URL: https://graph.microsoft.com/v1.0
+    volumes:
+      - ./output:/output
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
