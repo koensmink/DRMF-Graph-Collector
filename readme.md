@@ -4,7 +4,6 @@
 ## Structuur
 
 ```text
-.
 ├── Dockerfile
 ├── docker-compose.yml
 ├── main.py
