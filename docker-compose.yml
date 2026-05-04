@@ -20,3 +20,31 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+drmf-ai-enricher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: drmf-graph-collector:latest
+    container_name: drmf-ai-enricher
+    env_file:
+      - .env
+    environment:
+      AI_INPUT_PATH: /output/drmf_output.json
+      AI_OUTPUT_PATH: /output/drmf_enriched.json
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      AI_BATCH_SIZE: ${AI_BATCH_SIZE:-8}
+    volumes:
+      - ./output:/output
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint:
+      - python
+      - -m
+      - drmf_collector.ai_enricher
