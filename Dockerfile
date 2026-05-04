@@ -11,6 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system drmf \
     && useradd --system --gid drmf --home-dir /app --shell /usr/sbin/nologin drmf \
     && mkdir -p /output \
