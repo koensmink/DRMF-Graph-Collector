@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="DRMF Graph Collector"
-LABEL org.opencontainers.image.description="Graph-first collector for DRMF security control evidence"
-LABEL org.opencontainers.image.source="local"
+LABEL org.opencontainers.image.description="Modular Graph-first collector for DRMF security control evidence"
 LABEL org.opencontainers.image.licenses="Internal"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -17,13 +16,14 @@ RUN groupadd --system drmf \
     && mkdir -p /output \
     && chown -R drmf:drmf /app /output
 
-COPY requirements_drmf_python.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /app/requirements.txt
 
-COPY drmf_graph_collector.py /app/drmf_graph_collector.py
+COPY main.py /app/main.py
+COPY drmf_collector /app/drmf_collector
 
 USER drmf
 
-ENTRYPOINT ["python", "/app/drmf_graph_collector.py"]
+ENTRYPOINT ["python", "/app/main.py"]
