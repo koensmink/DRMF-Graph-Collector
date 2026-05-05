@@ -437,13 +437,7 @@ AccessReview.Read.All
 BitlockerKey.Read.All
 ```
 
-Grant admin consent after adding permissions.
-
-### Notes
-
-- Use application permissions, not delegated permissions.
-- Do not grant write permissions unless implementing remediation.
-- Avoid broad permissions like `Directory.ReadWrite.All` for this collector.
+Grant admin consent after adding permissions. Use application permissions, not delegated permissions.
 
 ---
 
@@ -574,50 +568,6 @@ services:
 
 ---
 
-## Container Security
-
-The container is intentionally hardened.
-
-Controls:
-
-- non-root runtime user
-- read-only filesystem
-- `/output` as only writable volume
-- `no-new-privileges`
-- all Linux capabilities dropped
-- no secrets baked into image layers
-
-Example Dockerfile hardening:
-
-```dockerfile
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-```
-
----
-
-## AI Enrichment
-
-### Purpose
-
-AI enrichment translates deterministic findings into actionable security interpretation.
-
-It is useful for:
-
-- explaining gaps
-- creating remediation guidance
-- identifying missing evidence
-- prioritizing work
-
-It is not used for:
-
-- control scoring
-- compliance status
-- pass/fail decisions
-- audit evidence
-
 ### Batching
 
 The AI enricher processes controls in batches.
@@ -723,8 +673,6 @@ docker compose run --rm drmf-graph-collector
 ```
 
 ---
-
-## Development Workflow
 
 ### Local Python run
 
