@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Callable
+from typing import Any, Callable, Dict
 
 from ..clients.arm_client import ArmClient
 from ..models import ControlResult
 from ..utils import result
+
+
+def _get_arm_client(client: Any | None = None) -> ArmClient:
+    """
+    Resolve the correct Azure Resource Manager client.
+
+    main.py currently passes the existing GraphClient to every evaluator.
+    Azure evaluators must ignore that GraphClient and create/use ArmClient instead.
+
+    If an ArmClient is explicitly passed, it will be reused.
+    Otherwise ArmClient.from_env() is used.
+    """
+
+    if isinstance(client, ArmClient):
+        return client
+
+    return ArmClient.from_env()
 
 
 def _arm_result(
@@ -44,24 +61,31 @@ def _safe_call(label: str, func: Callable[[], Any]) -> tuple[Any, str | None]:
 
 def _safe_list(label: str, func: Callable[[], Any]) -> tuple[list[dict[str, Any]], str | None]:
     data, error = _safe_call(label, func)
+
     if error:
         return [], error
+
     if isinstance(data, list):
         return data, None
+
     return [], f"{label}: response was not a list"
 
 
 def _subscription_ids(client: ArmClient) -> tuple[list[str], str | None]:
     subscriptions, error = _safe_call("list_subscription_ids", client.list_subscription_ids)
+
     if error:
         return [], error
+
     return subscriptions or [], None
 
 
 def _compact_resources(resources: list[dict[str, Any]], limit: int = 25) -> list[dict[str, Any]]:
     output = []
+
     for item in resources[:limit]:
         resource_id = item.get("id", "")
+
         output.append(
             {
                 "id": item.get("id"),
@@ -73,11 +97,12 @@ def _compact_resources(resources: list[dict[str, Any]], limit: int = 25) -> list
                 else None,
             }
         )
+
     return output
 
 
-def evaluate_defender_for_cloud_plans(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_defender_for_cloud_plans(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     pricing_by_subscription: dict[str, list[dict[str, Any]]] = {}
@@ -91,15 +116,18 @@ def evaluate_defender_for_cloud_plans(client: ArmClient | None = None) -> Contro
                 api_version="2024-01-01",
             ),
         )
+
         pricing_by_subscription[subscription_id] = pricings
+
         if error:
             errors[subscription_id] = error
 
-    enabled_summary = {}
-    disabled_or_free = []
+    enabled_summary: dict[str, list[dict[str, Any]]] = {}
+    disabled_or_free: list[dict[str, Any]] = []
 
     for subscription_id, pricings in pricing_by_subscription.items():
         enabled = []
+
         for item in pricings:
             props = item.get("properties") or {}
             entry = {
@@ -107,43 +135,67 @@ def evaluate_defender_for_cloud_plans(client: ArmClient | None = None) -> Contro
                 "pricingTier": props.get("pricingTier"),
                 "subPlan": props.get("subPlan"),
             }
+
             if str(entry["pricingTier"]).lower() == "standard":
                 enabled.append(entry)
             else:
                 disabled_or_free.append({"subscriptionId": subscription_id, **entry})
+
         enabled_summary[subscription_id] = enabled
 
     if not subscription_ids:
         status, reason, confidence = "error", "No Azure subscriptions could be enumerated.", "low"
     elif errors and len(errors) == len(subscription_ids):
-        status, reason, confidence = "error", "Defender for Cloud pricing endpoints could not be read for any subscription.", "low"
+        status, reason, confidence = (
+            "error",
+            "Defender for Cloud pricing endpoints could not be read for any subscription.",
+            "low",
+        )
     elif disabled_or_free:
-        status, reason, confidence = "partial", "Some Defender for Cloud plan entries are not set to Standard or could not be confirmed.", "medium"
+        status, reason, confidence = (
+            "partial",
+            "Some Defender for Cloud plan entries are not set to Standard or could not be confirmed.",
+            "medium",
+        )
     else:
-        status, reason, confidence = "pass", "Defender for Cloud pricing entries are set to Standard for observed subscriptions.", "medium"
+        status, reason, confidence = (
+            "pass",
+            "Defender for Cloud pricing entries are set to Standard for observed subscriptions.",
+            "medium",
+        )
 
     return _arm_result(
-        "AZ-01",
-        "Defender for Cloud enabled on all subscriptions",
-        status,
-        confidence,
-        reason,
-        "Required Microsoft Defender for Cloud plans are enabled and scoped for all in-scope subscriptions.",
-        f"subscription_count={len(subscription_ids)}; disabled_or_free_plan_count={len(disabled_or_free)}; error_count={len(errors)}",
-        {
+        control_id="AZ-01",
+        title="Defender for Cloud enabled on all subscriptions",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Required Microsoft Defender for Cloud plans are enabled and scoped for all in-scope subscriptions.",
+        observed=(
+            f"subscription_count={len(subscription_ids)}; "
+            f"disabled_or_free_plan_count={len(disabled_or_free)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "enabled_plans_by_subscription": enabled_summary,
             "disabled_or_free_plans": disabled_or_free[:50],
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Enable required Microsoft Defender for Cloud plans per subscription. Validate plan scope, subplans and exclusions.",
-        "This validates pricing tiers. It does not validate every plan's operational configuration or recommendation health.",
+        remediation_hint=(
+            "Enable required Microsoft Defender for Cloud plans per subscription. "
+            "Validate plan scope, subplans and exclusions."
+        ),
+        notes=(
+            "This validates pricing tiers. It does not validate every plan's operational "
+            "configuration or recommendation health."
+        ),
     )
 
 
-def evaluate_azure_policy_assignments(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_azure_policy_assignments(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     assignments_by_subscription: dict[str, list[dict[str, Any]]] = {}
@@ -157,7 +209,9 @@ def evaluate_azure_policy_assignments(client: ArmClient | None = None) -> Contro
                 api_version="2022-06-01",
             ),
         )
+
         assignments_by_subscription[subscription_id] = assignments
+
         if error:
             errors[subscription_id] = error
 
@@ -176,9 +230,17 @@ def evaluate_azure_policy_assignments(client: ArmClient | None = None) -> Contro
     elif total == 0:
         status, reason, confidence = "fail", "No Azure Policy assignments were found on observed subscriptions.", "medium"
     elif initiative_like:
-        status, reason, confidence = "pass", "Azure Policy assignments exist, including initiative/policy set assignments.", "medium"
+        status, reason, confidence = (
+            "pass",
+            "Azure Policy assignments exist, including initiative/policy set assignments.",
+            "medium",
+        )
     else:
-        status, reason, confidence = "partial", "Azure Policy assignments exist, but no initiative/policy set assignments were detected.", "medium"
+        status, reason, confidence = (
+            "partial",
+            "Azure Policy assignments exist, but no initiative/policy set assignments were detected.",
+            "medium",
+        )
 
     sample = []
     for subscription_id, assignments in assignments_by_subscription.items():
@@ -197,14 +259,22 @@ def evaluate_azure_policy_assignments(client: ArmClient | None = None) -> Contro
             )
 
     return _arm_result(
-        "AZ-02",
-        "Azure Policy initiatives assigned",
-        status,
-        confidence,
-        reason,
-        "Security baseline, tagging, allowed locations and governance initiatives are assigned at subscription or management group scope.",
-        f"subscription_count={len(subscription_ids)}; policy_assignment_count={total}; initiative_assignment_count={len(initiative_like)}; error_count={len(errors)}",
-        {
+        control_id="AZ-02",
+        title="Azure Policy initiatives assigned",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected=(
+            "Security baseline, tagging, allowed locations and governance initiatives are assigned "
+            "at subscription or management group scope."
+        ),
+        observed=(
+            f"subscription_count={len(subscription_ids)}; "
+            f"policy_assignment_count={total}; "
+            f"initiative_assignment_count={len(initiative_like)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "policy_assignment_count": total,
             "initiative_assignment_count": len(initiative_like),
@@ -212,14 +282,18 @@ def evaluate_azure_policy_assignments(client: ArmClient | None = None) -> Contro
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Assign relevant Azure Policy initiatives for security baseline, logging, tagging, location restrictions and regulatory compliance.",
-        "This checks assignment presence. It does not yet validate compliance state or initiative quality.",
+        remediation_hint=(
+            "Assign relevant Azure Policy initiatives for security baseline, logging, tagging, "
+            "location restrictions and regulatory compliance."
+        ),
+        notes="This checks assignment presence. It does not yet validate compliance state or initiative quality.",
     )
 
 
-def evaluate_public_ip_usage(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_public_ip_usage(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
+
     all_public_ips = []
     errors: dict[str, str] = {}
 
@@ -228,13 +302,18 @@ def evaluate_public_ip_usage(client: ArmClient | None = None) -> ControlResult:
             f"public_ips:{subscription_id}",
             lambda sid=subscription_id: client.list_resources_by_type(sid, "Microsoft.Network/publicIPAddresses"),
         )
+
         if error:
             errors[subscription_id] = error
+
         for item in resources:
             item["_subscriptionId"] = subscription_id
+
         all_public_ips.extend(resources)
 
-    unattached = [ip for ip in all_public_ips if not ((ip.get("properties") or {}).get("ipConfiguration"))]
+    unattached = [
+        ip for ip in all_public_ips if not ((ip.get("properties") or {}).get("ipConfiguration"))
+    ]
     static_ips = [
         ip
         for ip in all_public_ips
@@ -251,14 +330,18 @@ def evaluate_public_ip_usage(client: ArmClient | None = None) -> ControlResult:
         status, reason, confidence = "partial", "Public IP resources exist and require documented exposure review.", "medium"
 
     return _arm_result(
-        "AZ-03",
-        "Public IP usage minimized and documented",
-        status,
-        confidence,
-        reason,
-        "Public IP usage is minimized, justified and documented; unattached public IPs are removed.",
-        f"public_ip_count={len(all_public_ips)}; unattached_public_ip_count={len(unattached)}; static_public_ip_count={len(static_ips)}",
-        {
+        control_id="AZ-03",
+        title="Public IP usage minimized and documented",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Public IP usage is minimized, justified and documented; unattached public IPs are removed.",
+        observed=(
+            f"public_ip_count={len(all_public_ips)}; "
+            f"unattached_public_ip_count={len(unattached)}; "
+            f"static_public_ip_count={len(static_ips)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "public_ip_count": len(all_public_ips),
             "unattached_public_ip_count": len(unattached),
@@ -268,13 +351,13 @@ def evaluate_public_ip_usage(client: ArmClient | None = None) -> ControlResult:
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Review all Public IP resources, remove unattached IPs, and document justified internet exposure.",
-        "This does not prove whether attached resources are securely configured. NSG/firewall review is separate.",
+        remediation_hint="Review all Public IP resources, remove unattached IPs, and document justified internet exposure.",
+        notes="This does not prove whether attached resources are securely configured. NSG/firewall review is separate.",
     )
 
 
-def evaluate_private_endpoints(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_private_endpoints(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     private_endpoints = []
@@ -294,17 +377,20 @@ def evaluate_private_endpoints(client: ArmClient | None = None) -> ControlResult
             f"private_endpoints:{subscription_id}",
             lambda sid=subscription_id: client.list_resources_by_type(sid, "Microsoft.Network/privateEndpoints"),
         )
+
         if pe_error:
             errors[f"{subscription_id}:privateEndpoints"] = pe_error
 
         for item in pe_resources:
             item["_subscriptionId"] = subscription_id
+
         private_endpoints.extend(pe_resources)
 
         resources, resource_error = _safe_list(
             f"resources:{subscription_id}",
             lambda sid=subscription_id: client.list_resources(sid),
         )
+
         if resource_error:
             errors[f"{subscription_id}:resources"] = resource_error
 
@@ -316,21 +402,25 @@ def evaluate_private_endpoints(client: ArmClient | None = None) -> ControlResult
     if not subscription_ids:
         status, reason, confidence = "error", "No Azure subscriptions could be enumerated.", "low"
     elif private_endpoints:
-        status, reason, confidence = "partial", "Private Endpoints exist, but per-PaaS coverage still requires resource-level mapping.", "medium"
+        status, reason, confidence = (
+            "partial",
+            "Private Endpoints exist, but per-PaaS coverage still requires resource-level mapping.",
+            "medium",
+        )
     elif paas_candidates:
         status, reason, confidence = "fail", "PaaS resources exist but no Private Endpoints were found.", "medium"
     else:
         status, reason, confidence = "partial", "No Private Endpoints or tracked PaaS candidates were found.", "low"
 
     return _arm_result(
-        "AZ-04",
-        "Private Endpoints used for PaaS where feasible",
-        status,
-        confidence,
-        reason,
-        "Critical PaaS resources use Private Endpoints where feasible, with public network access restricted.",
-        f"private_endpoint_count={len(private_endpoints)}; paas_candidate_count={len(paas_candidates)}",
-        {
+        control_id="AZ-04",
+        title="Private Endpoints used for PaaS where feasible",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Critical PaaS resources use Private Endpoints where feasible, with public network access restricted.",
+        observed=f"private_endpoint_count={len(private_endpoints)}; paas_candidate_count={len(paas_candidates)}",
+        evidence={
             "subscription_ids": subscription_ids,
             "private_endpoint_count": len(private_endpoints),
             "paas_candidate_count": len(paas_candidates),
@@ -339,13 +429,16 @@ def evaluate_private_endpoints(client: ArmClient | None = None) -> ControlResult
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Map critical PaaS resources to Private Endpoints and restrict public network access where feasible.",
-        "Coverage is approximate until each PaaS resource is mapped to private endpoint connections and public network access settings.",
+        remediation_hint="Map critical PaaS resources to Private Endpoints and restrict public network access where feasible.",
+        notes=(
+            "Coverage is approximate until each PaaS resource is mapped to private endpoint "
+            "connections and public network access settings."
+        ),
     )
 
 
-def evaluate_key_vault_hardening(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_key_vault_hardening(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     vaults = []
@@ -357,8 +450,10 @@ def evaluate_key_vault_hardening(client: ArmClient | None = None) -> ControlResu
             f"key_vaults:{subscription_id}",
             lambda sid=subscription_id: client.list_resources_by_type(sid, "Microsoft.KeyVault/vaults"),
         )
+
         if error:
             errors[subscription_id] = error
+
         vaults.extend(resources)
 
     for vault in vaults:
@@ -404,19 +499,31 @@ def evaluate_key_vault_hardening(client: ArmClient | None = None) -> ControlResu
     elif not vaults:
         status, reason, confidence = "pass", "No Key Vault resources were found in observed subscriptions.", "medium"
     elif non_compliant:
-        status, reason, confidence = "fail", "One or more Key Vaults do not meet RBAC, soft delete or purge protection expectations.", "high"
+        status, reason, confidence = (
+            "fail",
+            "One or more Key Vaults do not meet RBAC, soft delete or purge protection expectations.",
+            "high",
+        )
     else:
-        status, reason, confidence = "pass", "Observed Key Vaults meet RBAC, soft delete and purge protection expectations.", "high"
+        status, reason, confidence = (
+            "pass",
+            "Observed Key Vaults meet RBAC, soft delete and purge protection expectations.",
+            "high",
+        )
 
     return _arm_result(
-        "AZ-05",
-        "Key Vault RBAC, soft delete and purge protection enabled",
-        status,
-        confidence,
-        reason,
-        "Key Vaults use Azure RBAC authorization and have soft delete and purge protection enabled.",
-        f"key_vault_count={len(vaults)}; non_compliant_key_vault_count={len(non_compliant)}; error_count={len(errors)}",
-        {
+        control_id="AZ-05",
+        title="Key Vault RBAC, soft delete and purge protection enabled",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Key Vaults use Azure RBAC authorization and have soft delete and purge protection enabled.",
+        observed=(
+            f"key_vault_count={len(vaults)}; "
+            f"non_compliant_key_vault_count={len(non_compliant)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "key_vault_count": len(vaults),
             "vaults": enriched_vaults[:50],
@@ -424,12 +531,15 @@ def evaluate_key_vault_hardening(client: ArmClient | None = None) -> ControlResu
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Enable Azure RBAC authorization, soft delete and purge protection on Key Vaults. Review public network access separately.",
+        remediation_hint=(
+            "Enable Azure RBAC authorization, soft delete and purge protection on Key Vaults. "
+            "Review public network access separately."
+        ),
     )
 
 
-def evaluate_storage_account_hardening(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_storage_account_hardening(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     storage_accounts = []
@@ -441,8 +551,10 @@ def evaluate_storage_account_hardening(client: ArmClient | None = None) -> Contr
             f"storage_accounts:{subscription_id}",
             lambda sid=subscription_id: client.list_resources_by_type(sid, "Microsoft.Storage/storageAccounts"),
         )
+
         if error:
             errors[subscription_id] = error
+
         storage_accounts.extend(resources)
 
     for account in storage_accounts:
@@ -493,14 +605,18 @@ def evaluate_storage_account_hardening(client: ArmClient | None = None) -> Contr
         status, reason, confidence = "pass", "Observed Storage Accounts meet basic hardening expectations.", "high"
 
     return _arm_result(
-        "AZ-06",
-        "Storage accounts hardened",
-        status,
-        confidence,
-        reason,
-        "Storage accounts require secure transfer, disable blob public access and enforce modern TLS.",
-        f"storage_account_count={len(storage_accounts)}; weak_storage_account_count={len(weak)}; error_count={len(errors)}",
-        {
+        control_id="AZ-06",
+        title="Storage accounts hardened",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Storage accounts require secure transfer, disable blob public access and enforce modern TLS.",
+        observed=(
+            f"storage_account_count={len(storage_accounts)}; "
+            f"weak_storage_account_count={len(weak)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "storage_account_count": len(storage_accounts),
             "storage_accounts": enriched[:50],
@@ -508,13 +624,16 @@ def evaluate_storage_account_hardening(client: ArmClient | None = None) -> Contr
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Require secure transfer, disable blob public access, enforce TLS 1.2+, and review public network/shared key access.",
-        "This does not yet validate Defender for Storage, lifecycle management or private endpoint coverage.",
+        remediation_hint=(
+            "Require secure transfer, disable blob public access, enforce TLS 1.2+, "
+            "and review public network/shared key access."
+        ),
+        notes="This does not yet validate Defender for Storage, lifecycle management or private endpoint coverage.",
     )
 
 
-def evaluate_resource_diagnostic_settings(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_resource_diagnostic_settings(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
     critical_types = {
@@ -533,6 +652,7 @@ def evaluate_resource_diagnostic_settings(client: ArmClient | None = None) -> Co
             f"resources:{subscription_id}",
             lambda sid=subscription_id: client.list_resources(sid),
         )
+
         if error:
             errors[f"{subscription_id}:resources"] = error
 
@@ -560,12 +680,15 @@ def evaluate_resource_diagnostic_settings(client: ArmClient | None = None) -> Co
             "destinations": [
                 {
                     "workspaceId": (setting.get("properties") or {}).get("workspaceId"),
-                    "eventHubAuthorizationRuleId": (setting.get("properties") or {}).get("eventHubAuthorizationRuleId"),
+                    "eventHubAuthorizationRuleId": (setting.get("properties") or {}).get(
+                        "eventHubAuthorizationRuleId"
+                    ),
                     "storageAccountId": (setting.get("properties") or {}).get("storageAccountId"),
                 }
                 for setting in settings
             ],
         }
+
         checked.append(entry)
 
         if error:
@@ -580,19 +703,31 @@ def evaluate_resource_diagnostic_settings(client: ArmClient | None = None) -> Co
     elif not resources:
         status, reason, confidence = "partial", "No tracked critical resource types were found.", "low"
     elif without_diagnostics:
-        status, reason, confidence = "fail", "One or more checked critical resources do not have diagnostic settings.", "medium"
+        status, reason, confidence = (
+            "fail",
+            "One or more checked critical resources do not have diagnostic settings.",
+            "medium",
+        )
     else:
         status, reason, confidence = "pass", "Checked critical resources have diagnostic settings configured.", "medium"
 
     return _arm_result(
-        "AZ-07",
-        "Resource diagnostics enabled for critical services",
-        status,
-        confidence,
-        reason,
-        "Critical Azure resources send diagnostics to a central Log Analytics workspace, Event Hub or Storage Account.",
-        f"critical_resource_count={len(resources)}; checked_count={len(checked)}; without_diagnostics_count={len(without_diagnostics)}; error_count={len(errors)}",
-        {
+        control_id="AZ-07",
+        title="Resource diagnostics enabled for critical services",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected=(
+            "Critical Azure resources send diagnostics to a central Log Analytics workspace, "
+            "Event Hub or Storage Account."
+        ),
+        observed=(
+            f"critical_resource_count={len(resources)}; "
+            f"checked_count={len(checked)}; "
+            f"without_diagnostics_count={len(without_diagnostics)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "critical_resource_types": sorted(critical_types),
             "critical_resource_count": len(resources),
@@ -603,16 +738,22 @@ def evaluate_resource_diagnostic_settings(client: ArmClient | None = None) -> Co
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Enable diagnostic settings for Key Vault, Storage and SQL resources and forward security-relevant logs to the central workspace.",
-        "Diagnostic settings API is checked per resource and can be slow. Use AZURE_DIAGNOSTIC_MAX_RESOURCE_CHECKS to cap runtime.",
+        remediation_hint=(
+            "Enable diagnostic settings for Key Vault, Storage and SQL resources and forward "
+            "security-relevant logs to the central workspace."
+        ),
+        notes=(
+            "Diagnostic settings API is checked per resource and can be slow. "
+            "Use AZURE_DIAGNOSTIC_MAX_RESOURCE_CHECKS to cap runtime."
+        ),
     )
 
 
-def evaluate_activity_log_diagnostics(client: ArmClient | None = None) -> ControlResult:
-    client = client or ArmClient.from_env()
+def evaluate_activity_log_diagnostics(client: Any | None = None) -> ControlResult:
+    client = _get_arm_client(client)
     subscription_ids, sub_error = _subscription_ids(client)
 
-    settings_by_subscription = {}
+    settings_by_subscription: dict[str, list[dict[str, Any]]] = {}
     missing = []
     errors: dict[str, str] = {}
 
@@ -624,6 +765,7 @@ def evaluate_activity_log_diagnostics(client: ArmClient | None = None) -> Contro
                 api_version="2021-05-01-preview",
             ),
         )
+
         settings_by_subscription[subscription_id] = settings
 
         if error:
@@ -636,7 +778,11 @@ def evaluate_activity_log_diagnostics(client: ArmClient | None = None) -> Contro
     elif errors and len(errors) == len(subscription_ids):
         status, reason, confidence = "error", "Subscription-level diagnostic settings could not be read.", "low"
     elif missing:
-        status, reason, confidence = "fail", "One or more subscriptions do not have subscription-level diagnostic settings.", "medium"
+        status, reason, confidence = (
+            "fail",
+            "One or more subscriptions do not have subscription-level diagnostic settings.",
+            "medium",
+        )
     else:
         status, reason, confidence = "pass", "Subscription-level diagnostic settings exist for observed subscriptions.", "medium"
 
@@ -646,7 +792,9 @@ def evaluate_activity_log_diagnostics(client: ArmClient | None = None) -> Contro
                 "id": setting.get("id"),
                 "name": setting.get("name"),
                 "workspaceId": (setting.get("properties") or {}).get("workspaceId"),
-                "eventHubAuthorizationRuleId": (setting.get("properties") or {}).get("eventHubAuthorizationRuleId"),
+                "eventHubAuthorizationRuleId": (setting.get("properties") or {}).get(
+                    "eventHubAuthorizationRuleId"
+                ),
                 "storageAccountId": (setting.get("properties") or {}).get("storageAccountId"),
             }
             for setting in settings[:10]
@@ -655,21 +803,28 @@ def evaluate_activity_log_diagnostics(client: ArmClient | None = None) -> Contro
     }
 
     return _arm_result(
-        "AZ-08",
-        "Activity Logs forwarded to central workspace",
-        status,
-        confidence,
-        reason,
-        "Azure Activity Logs are exported through subscription-level diagnostic settings to central logging.",
-        f"subscription_count={len(subscription_ids)}; subscriptions_without_settings={len(missing)}; error_count={len(errors)}",
-        {
+        control_id="AZ-08",
+        title="Activity Logs forwarded to central workspace",
+        status=status,
+        confidence=confidence,
+        reason=reason,
+        expected="Azure Activity Logs are exported through subscription-level diagnostic settings to central logging.",
+        observed=(
+            f"subscription_count={len(subscription_ids)}; "
+            f"subscriptions_without_settings={len(missing)}; "
+            f"error_count={len(errors)}"
+        ),
+        evidence={
             "subscription_ids": subscription_ids,
             "subscriptions_without_diagnostic_settings": missing,
             "settings_by_subscription_sample": sample,
             "errors": errors,
             "subscription_error": sub_error,
         },
-        "Create subscription-level diagnostic settings for Activity Logs and send them to the central Log Analytics workspace, Event Hub or Storage Account.",
+        remediation_hint=(
+            "Create subscription-level diagnostic settings for Activity Logs and send them to the "
+            "central Log Analytics workspace, Event Hub or Storage Account."
+        ),
     )
 
 
