@@ -430,7 +430,6 @@ Grant admin consent after adding permissions. Use application permissions, not d
 ```text
 Reader
 Security Reader
-Resource Policy Reader
 ```
 
 ---
