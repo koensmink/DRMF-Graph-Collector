@@ -16,41 +16,37 @@ DEFAULT_BATCH_SIZE = int(os.getenv("AI_BATCH_SIZE", "8"))
 DEFAULT_MAX_RETRIES = int(os.getenv("AI_MAX_RETRIES", "3"))
 DEFAULT_SLEEP_SECONDS = int(os.getenv("AI_RETRY_SLEEP_SECONDS", "5"))
 
-# Smart filter feature flags
+# Smart filter configuration
 AI_FILTER_ENABLED = os.getenv("AI_FILTER_ENABLED", "true").lower() == "true"
 
-# Default: only enrich controls where AI adds value.
-# Comma-separated values, e.g. "fail,partial,error"
 AI_ENRICH_STATUSES = {
     item.strip().lower()
-    for item in os.getenv("AI_ENRICH_STATUSES", "fail,partial").split(",")
+    for item in os.getenv("AI_ENRICH_STATUSES", "fail,partial,error").split(",")
     if item.strip()
 }
 
-# Optional confidence filter.
-# Empty means: do not filter on confidence.
-# Example: "low,medium"
+# Empty value disables confidence filtering.
+# Example:
+# AI_ENRICH_CONFIDENCE=low,medium
+# AI_ENRICH_CONFIDENCE=
 AI_ENRICH_CONFIDENCE = {
     item.strip().lower()
     for item in os.getenv("AI_ENRICH_CONFIDENCE", "low,medium").split(",")
     if item.strip()
 }
 
-# Optional domain/control-prefix filter.
-# Empty means: all domains.
-# Example: "ID-,EP-,MD-"
+# Optional control prefix filter.
+# Example:
+# AI_ENRICH_CONTROL_PREFIXES=ID-,EP-,MD-
 AI_ENRICH_CONTROL_PREFIXES = [
     item.strip()
     for item in os.getenv("AI_ENRICH_CONTROL_PREFIXES", "").split(",")
     if item.strip()
 ]
 
-# Optional: always enrich controls with explicit errors, regardless of confidence.
 AI_ALWAYS_ENRICH_ERRORS = os.getenv("AI_ALWAYS_ENRICH_ERRORS", "true").lower() == "true"
-
-# Optional: enrich passed controls with low confidence.
-# Default false because successful controls usually add little value.
 AI_ENRICH_LOW_CONFIDENCE_PASS = os.getenv("AI_ENRICH_LOW_CONFIDENCE_PASS", "false").lower() == "true"
+AI_WRITE_SKIPPED_MARKERS = os.getenv("AI_WRITE_SKIPPED_MARKERS", "true").lower() == "true"
 
 
 SYSTEM_PROMPT = """You are a senior cloud security architect reviewing Microsoft security control evidence.
@@ -81,20 +77,16 @@ def should_enrich(control: Dict[str, Any]) -> bool:
     """
     Smart filter for AI enrichment.
 
-    Goal:
-    - Enrich controls where AI adds value.
-    - Skip deterministic pass results by default.
-    - Reduce cost, latency and noise.
-
     Default behavior:
-    - Enrich fail and partial.
-    - Enrich error if AI_ALWAYS_ENRICH_ERRORS=true.
-    - For partial, require confidence low/medium unless confidence filtering is disabled.
-    - Skip pass unless AI_ENRICH_LOW_CONFIDENCE_PASS=true and confidence is low.
+    - Enrich fail, partial and error controls.
+    - Skip pass controls.
+    - For partial controls, only enrich low/medium confidence by default.
+    - Always enrich errors when AI_ALWAYS_ENRICH_ERRORS=true.
+    - Optional prefix filtering via AI_ENRICH_CONTROL_PREFIXES.
 
     Environment variables:
     - AI_FILTER_ENABLED=true|false
-    - AI_ENRICH_STATUSES=fail,partial
+    - AI_ENRICH_STATUSES=fail,partial,error
     - AI_ENRICH_CONFIDENCE=low,medium
     - AI_ENRICH_CONTROL_PREFIXES=ID-,EP-,MD-
     - AI_ALWAYS_ENRICH_ERRORS=true
@@ -108,34 +100,28 @@ def should_enrich(control: Dict[str, Any]) -> bool:
     confidence = str(control.get("confidence", "")).lower()
     control_id = str(control.get("control_id", ""))
 
-    # Optional domain/prefix targeting.
     if AI_ENRICH_CONTROL_PREFIXES:
         if not any(control_id.startswith(prefix) for prefix in AI_ENRICH_CONTROL_PREFIXES):
             return False
 
-    # Explicit errors are usually worth enriching.
     if status == "error" and AI_ALWAYS_ENRICH_ERRORS:
         return True
 
-    # Default target statuses: fail + partial.
-    if status in AI_ENRICH_STATUSES:
-        # If no confidence filter is configured, enrich based on status only.
-        if not AI_ENRICH_CONFIDENCE:
-            return True
+    if status == "pass":
+        return AI_ENRICH_LOW_CONFIDENCE_PASS and confidence == "low"
 
-        # Failures are normally worth enriching regardless of confidence.
-        if status == "fail":
-            return True
+    if status not in AI_ENRICH_STATUSES:
+        return False
 
-        # Partial controls benefit most when confidence is low/medium.
-        return confidence in AI_ENRICH_CONFIDENCE
+    # Failures are useful to enrich regardless of confidence.
+    if status == "fail":
+        return True
 
-    # Optional: enrich low-confidence pass results.
-    # Useful if your evaluators sometimes pass on weak evidence.
-    if status == "pass" and AI_ENRICH_LOW_CONFIDENCE_PASS:
-        return confidence == "low"
+    # If confidence filter is empty, status is enough.
+    if not AI_ENRICH_CONFIDENCE:
+        return True
 
-    return False
+    return confidence in AI_ENRICH_CONFIDENCE
 
 
 def _strip_large_evidence(control: Dict[str, Any], max_items: int = 10) -> Dict[str, Any]:
@@ -309,6 +295,7 @@ def enrich_payload(
             "control_prefixes": AI_ENRICH_CONTROL_PREFIXES,
             "always_enrich_errors": AI_ALWAYS_ENRICH_ERRORS,
             "enrich_low_confidence_pass": AI_ENRICH_LOW_CONFIDENCE_PASS,
+            "write_skipped_markers": AI_WRITE_SKIPPED_MARKERS,
         },
         "input_result_count": len(results),
         "selected_for_enrichment_count": len(controls_to_enrich),
@@ -330,7 +317,7 @@ def enrich_payload(
 
         if control_id in ai_items_by_id:
             control["ai"] = ai_items_by_id[control_id]
-        else:
+        elif AI_WRITE_SKIPPED_MARKERS:
             control["ai"] = _skipped_item(control)
 
     enriched_payload["ai_enrichment"]["completed"] = True
