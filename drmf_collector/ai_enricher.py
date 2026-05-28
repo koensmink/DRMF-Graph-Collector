@@ -16,6 +16,42 @@ DEFAULT_BATCH_SIZE = int(os.getenv("AI_BATCH_SIZE", "8"))
 DEFAULT_MAX_RETRIES = int(os.getenv("AI_MAX_RETRIES", "3"))
 DEFAULT_SLEEP_SECONDS = int(os.getenv("AI_RETRY_SLEEP_SECONDS", "5"))
 
+# Smart filter feature flags
+AI_FILTER_ENABLED = os.getenv("AI_FILTER_ENABLED", "true").lower() == "true"
+
+# Default: only enrich controls where AI adds value.
+# Comma-separated values, e.g. "fail,partial,error"
+AI_ENRICH_STATUSES = {
+    item.strip().lower()
+    for item in os.getenv("AI_ENRICH_STATUSES", "fail,partial").split(",")
+    if item.strip()
+}
+
+# Optional confidence filter.
+# Empty means: do not filter on confidence.
+# Example: "low,medium"
+AI_ENRICH_CONFIDENCE = {
+    item.strip().lower()
+    for item in os.getenv("AI_ENRICH_CONFIDENCE", "low,medium").split(",")
+    if item.strip()
+}
+
+# Optional domain/control-prefix filter.
+# Empty means: all domains.
+# Example: "ID-,EP-,MD-"
+AI_ENRICH_CONTROL_PREFIXES = [
+    item.strip()
+    for item in os.getenv("AI_ENRICH_CONTROL_PREFIXES", "").split(",")
+    if item.strip()
+]
+
+# Optional: always enrich controls with explicit errors, regardless of confidence.
+AI_ALWAYS_ENRICH_ERRORS = os.getenv("AI_ALWAYS_ENRICH_ERRORS", "true").lower() == "true"
+
+# Optional: enrich passed controls with low confidence.
+# Default false because successful controls usually add little value.
+AI_ENRICH_LOW_CONFIDENCE_PASS = os.getenv("AI_ENRICH_LOW_CONFIDENCE_PASS", "false").lower() == "true"
+
 
 SYSTEM_PROMPT = """You are a senior cloud security architect reviewing Microsoft security control evidence.
 
@@ -41,7 +77,73 @@ For each control return:
 """
 
 
+def should_enrich(control: Dict[str, Any]) -> bool:
+    """
+    Smart filter for AI enrichment.
+
+    Goal:
+    - Enrich controls where AI adds value.
+    - Skip deterministic pass results by default.
+    - Reduce cost, latency and noise.
+
+    Default behavior:
+    - Enrich fail and partial.
+    - Enrich error if AI_ALWAYS_ENRICH_ERRORS=true.
+    - For partial, require confidence low/medium unless confidence filtering is disabled.
+    - Skip pass unless AI_ENRICH_LOW_CONFIDENCE_PASS=true and confidence is low.
+
+    Environment variables:
+    - AI_FILTER_ENABLED=true|false
+    - AI_ENRICH_STATUSES=fail,partial
+    - AI_ENRICH_CONFIDENCE=low,medium
+    - AI_ENRICH_CONTROL_PREFIXES=ID-,EP-,MD-
+    - AI_ALWAYS_ENRICH_ERRORS=true
+    - AI_ENRICH_LOW_CONFIDENCE_PASS=false
+    """
+
+    if not AI_FILTER_ENABLED:
+        return True
+
+    status = str(control.get("status", "")).lower()
+    confidence = str(control.get("confidence", "")).lower()
+    control_id = str(control.get("control_id", ""))
+
+    # Optional domain/prefix targeting.
+    if AI_ENRICH_CONTROL_PREFIXES:
+        if not any(control_id.startswith(prefix) for prefix in AI_ENRICH_CONTROL_PREFIXES):
+            return False
+
+    # Explicit errors are usually worth enriching.
+    if status == "error" and AI_ALWAYS_ENRICH_ERRORS:
+        return True
+
+    # Default target statuses: fail + partial.
+    if status in AI_ENRICH_STATUSES:
+        # If no confidence filter is configured, enrich based on status only.
+        if not AI_ENRICH_CONFIDENCE:
+            return True
+
+        # Failures are normally worth enriching regardless of confidence.
+        if status == "fail":
+            return True
+
+        # Partial controls benefit most when confidence is low/medium.
+        return confidence in AI_ENRICH_CONFIDENCE
+
+    # Optional: enrich low-confidence pass results.
+    # Useful if your evaluators sometimes pass on weak evidence.
+    if status == "pass" and AI_ENRICH_LOW_CONFIDENCE_PASS:
+        return confidence == "low"
+
+    return False
+
+
 def _strip_large_evidence(control: Dict[str, Any], max_items: int = 10) -> Dict[str, Any]:
+    """
+    Reduce payload size before sending to AI.
+    Keeps deterministic fields intact but trims large samples/lists.
+    """
+
     clone = deepcopy(control)
     evidence = clone.get("evidence")
 
@@ -93,6 +195,19 @@ def _fallback_item(control: Dict[str, Any], reason: str) -> Dict[str, Any]:
     }
 
 
+def _skipped_item(control: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "control_id": str(control.get("control_id", "unknown")),
+        "skipped": True,
+        "reason": "Skipped by AI smart filter.",
+        "filter_basis": {
+            "status": control.get("status"),
+            "confidence": control.get("confidence"),
+            "control_id": control.get("control_id"),
+        },
+    }
+
+
 def _validate_ai_items(batch: List[Dict[str, Any]], parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     items = parsed.get("items")
     if not isinstance(items, list):
@@ -118,9 +233,15 @@ def _validate_ai_items(batch: List[Dict[str, Any]], parsed: Dict[str, Any]) -> L
                 "insight": str(item.get("insight", "")).strip() or "No insight returned.",
                 "gap_analysis": str(item.get("gap_analysis", "")).strip() or "No gap analysis returned.",
                 "recommended_action": str(item.get("recommended_action", "")).strip() or "Review manually.",
-                "risk_priority": item.get("risk_priority") if item.get("risk_priority") in ["low", "medium", "high", "unknown"] else "unknown",
-                "confidence_adjusted": item.get("confidence_adjusted") if item.get("confidence_adjusted") in ["low", "medium", "high"] else "low",
-                "missing_evidence": item.get("missing_evidence") if isinstance(item.get("missing_evidence"), list) else [],
+                "risk_priority": item.get("risk_priority")
+                if item.get("risk_priority") in ["low", "medium", "high", "unknown"]
+                else "unknown",
+                "confidence_adjusted": item.get("confidence_adjusted")
+                if item.get("confidence_adjusted") in ["low", "medium", "high"]
+                else "low",
+                "missing_evidence": item.get("missing_evidence")
+                if isinstance(item.get("missing_evidence"), list)
+                else [],
             }
         )
 
@@ -173,25 +294,46 @@ def enrich_payload(
     enriched_payload = deepcopy(payload)
     results = enriched_payload["results"]
 
+    controls_to_enrich = [control for control in results if should_enrich(control)]
+    skipped_controls = [control for control in results if not should_enrich(control)]
+
     enriched_payload["ai_enrichment"] = {
         "enabled": True,
         "model": model,
         "batch_size": batch_size,
         "mode": "post_processing",
+        "filter_enabled": AI_FILTER_ENABLED,
+        "filter": {
+            "statuses": sorted(AI_ENRICH_STATUSES),
+            "confidence": sorted(AI_ENRICH_CONFIDENCE),
+            "control_prefixes": AI_ENRICH_CONTROL_PREFIXES,
+            "always_enrich_errors": AI_ALWAYS_ENRICH_ERRORS,
+            "enrich_low_confidence_pass": AI_ENRICH_LOW_CONFIDENCE_PASS,
+        },
+        "input_result_count": len(results),
+        "selected_for_enrichment_count": len(controls_to_enrich),
+        "skipped_count": len(skipped_controls),
         "note": "AI enrichment is advisory and does not change deterministic control status.",
     }
 
-    for start in range(0, len(results), batch_size):
-        batch = results[start:start + batch_size]
-        ai_items = enrich_batch(client=client, batch=batch, model=model)
-        ai_by_id = {item["control_id"]: item for item in ai_items}
+    ai_items_by_id: Dict[str, Dict[str, Any]] = {}
 
-        for control in batch:
-            control_id = str(control.get("control_id", "unknown"))
-            control["ai"] = ai_by_id.get(control_id, _fallback_item(control, "AI item missing after batch enrichment."))
+    for start in range(0, len(controls_to_enrich), batch_size):
+        batch = controls_to_enrich[start : start + batch_size]
+        ai_items = enrich_batch(client=client, batch=batch, model=model)
+
+        for item in ai_items:
+            ai_items_by_id[str(item["control_id"])] = item
+
+    for control in results:
+        control_id = str(control.get("control_id", "unknown"))
+
+        if control_id in ai_items_by_id:
+            control["ai"] = ai_items_by_id[control_id]
+        else:
+            control["ai"] = _skipped_item(control)
 
     enriched_payload["ai_enrichment"]["completed"] = True
-    enriched_payload["ai_enrichment"]["result_count"] = len(results)
 
     return enriched_payload
 
