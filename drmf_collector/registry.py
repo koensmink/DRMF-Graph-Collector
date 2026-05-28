@@ -40,9 +40,13 @@ from .evaluators.intune_expanded import (
 from .evaluators.named_locations import evaluate_named_locations
 from .evaluators.oauth_apps import evaluate_oauth_app_governance
 from .evaluators.pim import evaluate_pim_privileged_roles
+from .evaluators.azure import AZURE_EVALUATORS
 
 
-Evaluator = Callable[[GraphClient], ControlResult]
+# Callable[..., ControlResult] is used because:
+# - Graph evaluators receive GraphClient from main.py
+# - Azure evaluators initialize/use ArmClient internally by default
+Evaluator = Callable[..., ControlResult]
 
 
 CONTROL_EVALUATORS: List[Evaluator] = [
@@ -82,3 +86,8 @@ CONTROL_EVALUATORS: List[Evaluator] = [
     # Monitoring / detection via Graph
     evaluate_identity_protection_triage,
 ]
+
+
+# Azure / ARM evaluators
+# These controls use Azure Resource Manager instead of Microsoft Graph.
+CONTROL_EVALUATORS.extend(AZURE_EVALUATORS)
