@@ -425,6 +425,14 @@ BitlockerKey.Read.All
 
 Grant admin consent after adding permissions. Use application permissions, not delegated permissions.
 
+## Required Microsoft RBAC Azure Permissions
+
+```text
+Reader
+Security Reader
+Resource Policy Reader
+```
+
 ---
 
 ## Configuration
