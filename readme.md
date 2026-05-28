@@ -270,6 +270,49 @@ The collector currently includes checks for the following control areas.
 - Recent sign-in sample availability
 
 ---
+## Implemented Controls
+
+| # | Control ID | Domain | Control | Source |
+|---:|---|---|---|---|
+| 1 | `ID-01` | Identity / Entra | MFA enforced for all users | Microsoft Graph |
+| 2 | `ID-02` | Identity / Entra | MFA enforced for all admin roles | Microsoft Graph |
+| 3 | `ID-03` | Identity / Entra | Legacy authentication blocked tenant-wide | Microsoft Graph / Exchange validation needed |
+| 4 | `ID-04` | Identity / Entra | PIM enabled for all privileged roles | Microsoft Graph |
+| 5 | `ID-05` | Identity / Entra | Break-glass accounts excluded from CA and monitored | Microsoft Graph / manual evidence |
+| 6 | `ID-06` | Identity / Entra | Conditional Access requires compliant device | Microsoft Graph |
+| 7 | `ID-07` | Identity / Entra | Conditional Access requires phishing-resistant MFA for admins | Microsoft Graph |
+| 8 | `ID-08` | Identity / Entra | Block high sign-in risk and force password reset on high user risk | Microsoft Graph |
+| 9 | `ID-09` | Identity / Entra | Authentication Methods Policy hardened | Microsoft Graph |
+| 10 | `ID-10` | Identity / Entra | Admin consent workflow enabled | Microsoft Graph |
+| 11 | `ID-11` | Identity / Entra | Application registrations restricted | Microsoft Graph |
+| 12 | `ID-12` | Identity / Entra | OAuth app governance | Microsoft Graph |
+| 13 | `ID-13` | Identity / Entra | Cross-tenant access settings configured | Microsoft Graph |
+| 14 | `ID-14` | Identity / Entra | Named locations defined | Microsoft Graph |
+| 15 | `ID-16` | Identity / Entra | Security defaults disabled only if replaced by CA baseline | Microsoft Graph |
+| 16 | `ID-17` | Identity / Entra | Access Reviews scheduled and enforced | Microsoft Graph |
+| 17 | `EP-01` | Endpoint / Intune | Microsoft Defender for Endpoint onboarded | Microsoft Graph / Intune |
+| 18 | `EP-03` | Endpoint / Intune | Attack Surface Reduction rules in Block | Microsoft Graph / Intune |
+| 19 | `EP-05` | Endpoint / Intune | BitLocker recovery keys escrowed | Microsoft Graph / Intune |
+| 20 | `EP-06` | Endpoint / Intune | Windows LAPS enabled and deployed | Microsoft Graph / Intune |
+| 21 | `EP-07` | Endpoint / Intune | Local admin restrictions implemented | Microsoft Graph / Intune |
+| 22 | `EP-08` | Endpoint / Intune | Intune compliance policies defined and enforced via CA | Microsoft Graph / Intune |
+| 23 | `EP-09` | Endpoint / Intune | Endpoint firewall enabled and centrally managed | Microsoft Graph / Intune |
+| 24 | `EP-10` | Endpoint / Intune | Defender web/network protection enabled | Microsoft Graph / Intune |
+| 25 | `EP-11` | Endpoint / Intune | Device Control / USB restrictions | Microsoft Graph / Intune |
+| 26 | `EP-12` | Endpoint / Intune | OS update rings configured and monitored | Microsoft Graph / Intune |
+| 27 | `EP-15` | Endpoint / Intune | Defender Antivirus cloud protection / high cloud block level | Microsoft Graph / Intune |
+| 28 | `EP-16` | Endpoint / Intune | Device configuration baseline applied | Microsoft Graph / Intune |
+| 29 | `EP-17` | Endpoint / Intune | MAM for BYOD | Microsoft Graph / Intune |
+| 30 | `MD-09` | Monitoring / Detection | Identity Protection alerts triaged and tracked | Microsoft Graph |
+| 31 | `AZ-01` | Azure / ARM | Defender for Cloud enabled on all subscriptions | Azure Resource Manager |
+| 32 | `AZ-02` | Azure / ARM | Azure Policy initiatives assigned | Azure Resource Manager |
+| 33 | `AZ-03` | Azure / ARM | Public IP usage minimized and documented | Azure Resource Manager |
+| 34 | `AZ-04` | Azure / ARM | Private Endpoints used for PaaS where feasible | Azure Resource Manager |
+| 35 | `AZ-05` | Azure / ARM | Key Vault RBAC, soft delete and purge protection enabled | Azure Resource Manager |
+| 36 | `AZ-06` | Azure / ARM | Storage accounts hardened | Azure Resource Manager |
+| 37 | `AZ-07` | Azure / ARM | Resource diagnostics enabled for critical services | Azure Resource Manager |
+| 38 | `AZ-08` | Azure / ARM | Activity Logs forwarded to central workspace | Azure Resource Manager |
+
 
 ## Output Model
 
